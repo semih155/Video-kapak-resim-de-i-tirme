@@ -21,3 +21,10 @@ pkg update && pkg upgrade -y
 
 # 3. Gerekli araçları (FFmpeg) kurun
 pkg install ffmpeg -y
+
+# 1. Scripte çalıştırma izni verin
+chmod +x kapak.sh
+
+# 2. Scripti başlatın
+./kapak.sh
+
