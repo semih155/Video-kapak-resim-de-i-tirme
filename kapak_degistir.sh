@@ -1,6 +1,6 @@
+cat > ~/Video-kapak-resim-de-i-tirme/kapak_degistir.sh << 'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 
-# Ayarları yükle
 [ -f "$HOME/.kapak_ayarlari.conf" ] && source "$HOME/.kapak_ayarlari.conf"
 
 ISLENENLER_LISTESI="$HOME/.islenenler.txt"
@@ -11,19 +11,23 @@ _kaydet_ayarlar() {
     echo "VARSAYILAN_RESIM=\"$VARSAYILAN_RESIM\"" >> "$HOME/.kapak_ayarlari.conf"
 }
 
+_zaten_islendi_mi() {
+    local aranan="$1"
+    while IFS= read -r satir; do
+        [ "$satir" = "$aranan" ] && return 0
+    done < "$ISLENENLER_LISTESI"
+    return 1
+}
+
 _ilerleme_goster() {
     local mevcut=$1
     local toplam=$2
-    local video_adi=$3
     local yuzde=$(( mevcut * 100 / toplam ))
-    local dolu=$(( yuzde / 5 ))      # 20 karakterlik bar (her 5% = 1 blok)
+    local dolu=$(( yuzde / 5 ))
     local bos=$(( 20 - dolu ))
-
     local bar=""
     for ((i=0; i<dolu; i++)); do bar+="█"; done
     for ((i=0; i<bos; i++));  do bar+="░"; done
-
-    # Aynı satırı güncelle (üzerine yaz)
     printf "\r  [%s] %3d%%  (%d/%d)" "$bar" "$yuzde" "$mevcut" "$toplam"
 }
 
@@ -45,16 +49,12 @@ ana_menu() {
         1)
             if [ -z "$VARSAYILAN_RESIM" ]; then
                 echo "  HATA: Önce resim ayarını yapın! (Seçenek 3)"
-                sleep 2
-                ana_menu
-                return
+                sleep 2; ana_menu; return
             fi
 
             if [ ! -f "$VARSAYILAN_RESIM" ]; then
                 echo "  HATA: Resim bulunamadı: $VARSAYILAN_RESIM"
-                sleep 2
-                ana_menu
-                return
+                sleep 2; ana_menu; return
             fi
 
             echo ""
@@ -63,23 +63,18 @@ ana_menu() {
 
             if [ -z "$girilen_klasor" ]; then
                 echo "  İptal edildi."
-                sleep 1
-                ana_menu
-                return
+                sleep 1; ana_menu; return
             fi
 
             if [ ! -d "$girilen_klasor" ]; then
                 echo "  HATA: Klasör bulunamadı: $girilen_klasor"
-                sleep 2
-                ana_menu
-                return
+                sleep 2; ana_menu; return
             fi
 
             VARSAYILAN_KLASOR="$girilen_klasor"
             _kaydet_ayarlar
             cd "$VARSAYILAN_KLASOR"
 
-            # Önce toplam video sayısını say
             toplam=0
             for video in *.mp4 *.mkv; do
                 [ -e "$video" ] || continue
@@ -88,16 +83,13 @@ ana_menu() {
 
             if [ $toplam -eq 0 ]; then
                 echo "  Bu klasörde hiç video bulunamadı!"
-                sleep 2
-                ana_menu
-                return
+                sleep 2; ana_menu; return
             fi
 
-            # Kaçı zaten işlenmiş?
             zaten=0
             for video in *.mp4 *.mkv; do
                 [ -e "$video" ] || continue
-                grep -Fxq "$video" "$ISLENENLER_LISTESI" && zaten=$((zaten + 1))
+                _zaten_islendi_mi "$video" && zaten=$((zaten + 1))
             done
             islencek=$((toplam - zaten))
 
@@ -113,24 +105,18 @@ ana_menu() {
             if [ $islencek -eq 0 ]; then
                 echo "  Tüm videolar zaten işlenmiş!"
                 read -p "  Enter'a bas..."
-                ana_menu
-                return
+                ana_menu; return
             fi
 
-            siradaki=0
             islem_sayisi=0
             hata_sayisi=0
 
             for video in *.mp4 *.mkv; do
                 [ -e "$video" ] || continue
-                siradaki=$((siradaki + 1))
-
-                if grep -Fxq "$video" "$ISLENENLER_LISTESI"; then
-                    continue
-                fi
+                _zaten_islendi_mi "$video" && continue
 
                 islem_sayisi=$((islem_sayisi + 1))
-                _ilerleme_goster "$islem_sayisi" "$islencek" "$video"
+                _ilerleme_goster "$islem_sayisi" "$islencek"
 
                 ffmpeg -i "$video" -i "$VARSAYILAN_RESIM" \
                     -map 0 -map 1 -c copy \
@@ -158,15 +144,14 @@ ana_menu() {
             ;;
 
         2)
-            read -p "  Hafızayı silmek istediğinize emin misiniz? (e/h): " onay
+            read -p "  Emin misiniz? (e/h): " onay
             if [ "$onay" = "e" ] || [ "$onay" = "E" ]; then
                 rm -f "$ISLENENLER_LISTESI" && touch "$ISLENENLER_LISTESI"
-                echo "  Hafıza silindi. Tüm videolar tekrar işlenecek."
+                echo "  Hafıza silindi."
             else
                 echo "  İptal edildi."
             fi
-            sleep 1
-            ana_menu
+            sleep 1; ana_menu
             ;;
 
         3)
@@ -177,28 +162,28 @@ ana_menu() {
                 if [ -f "$yeni_r" ]; then
                     VARSAYILAN_RESIM="$yeni_r"
                     _kaydet_ayarlar
-                    echo "  Resim güncellendi: $VARSAYILAN_RESIM"
+                    echo "  Resim güncellendi."
                 else
-                    echo "  HATA: Resim dosyası bulunamadı, değişiklik yapılmadı."
+                    echo "  HATA: Dosya bulunamadı."
                 fi
             else
                 echo "  Değişiklik yapılmadı."
             fi
-            sleep 1
-            ana_menu
+            sleep 1; ana_menu
             ;;
 
         4)
-            echo "  Çıkılıyor..."
             exit 0
             ;;
 
         *)
             echo "  Geçersiz seçim!"
-            sleep 1
-            ana_menu
+            sleep 1; ana_menu
             ;;
     esac
 }
 
 ana_menu
+EOF
+chmod +x ~/Video-kapak-resim-de-i-tirme/kapak_degistir.sh
+echo "Güncellendi!"
