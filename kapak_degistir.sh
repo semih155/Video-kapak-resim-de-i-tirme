@@ -22,6 +22,7 @@ _zaten_islendi_mi() {
 _ilerleme_goster() {
     local mevcut=$1
     local toplam=$2
+    if [ "$toplam" -le 0 ]; then toplam=1; fi
     local yuzde=$(( mevcut * 100 / toplam ))
     local dolu=$(( yuzde / 5 ))
     local bos=$(( 20 - dolu ))
@@ -61,9 +62,14 @@ ana_menu() {
             echo "  Son kullanılan klasör: ${VARSAYILAN_KLASOR:-'Yok'}"
             read -p "  Video Klasörü Tam Yolu: " girilen_klasor
 
+            # Eğer boş bırakılırsa ve eski klasör varsa eskisini kullan
             if [ -z "$girilen_klasor" ]; then
-                echo "  İptal edildi."
-                sleep 1; ana_menu; return
+                if [ -z "$VARSAYILAN_KLASOR" ]; then
+                    echo "  İptal edildi."
+                    sleep 1; ana_menu; return
+                else
+                    girilen_klasor="$VARSAYILAN_KLASOR"
+                fi
             fi
 
             if [ ! -d "$girilen_klasor" ]; then
@@ -74,8 +80,8 @@ ana_menu() {
             VARSAYILAN_KLASOR="$girilen_klasor"
             _kaydet_ayarlar
 
-            # Geçici dosyaya yaz, sonra oku
             TEMP_LIST="$HOME/.video_listesi_tmp.txt"
+            # Boşluklu isimler için find komutunu güvenli hale getirdik
             find "$VARSAYILAN_KLASOR" -maxdepth 1 \( -iname "*.mp4" -o -iname "*.mkv" \) > "$TEMP_LIST"
 
             toplam=$(wc -l < "$TEMP_LIST")
@@ -88,6 +94,7 @@ ana_menu() {
 
             zaten=0
             while IFS= read -r video; do
+                [ -z "$video" ] && continue
                 isim=$(basename "$video")
                 _zaten_islendi_mi "$isim" && zaten=$((zaten + 1))
             done < "$TEMP_LIST"
@@ -114,26 +121,30 @@ ana_menu() {
             hata_sayisi=0
 
             while IFS= read -r video; do
+                [ -z "$video" ] && continue
                 isim=$(basename "$video")
                 klasor=$(dirname "$video")
 
-                _zaten_islendi_mi "$isim" && continue
+                if _zaten_islendi_mi "$isim"; then
+                    continue
+                fi
 
                 islem_sayisi=$((islem_sayisi + 1))
                 _ilerleme_goster "$islem_sayisi" "$islencek"
 
-                temp_dosya="$klasor/temp_$$_$islem_sayisi.mp4"
+                temp_dosya="$klasor/temp_${$}_${islem_sayisi}.mp4"
 
+                # FFmpeg komutundaki tüm değişkenleri tırnak içine alarak sabitledik
                 ffmpeg -i "$video" -i "$VARSAYILAN_RESIM" \
                     -map 0 -map 1 -c copy \
                     -disposition:v:1 attached_pic \
                     "$temp_dosya" -y -loglevel quiet 2>/dev/null
 
-                if [ $? -eq 0 ]; then
+                if [ $? -eq 0 ] && [ -f "$temp_dosya" ]; then
                     mv "$temp_dosya" "$video"
                     echo "$isim" >> "$ISLENENLER_LISTESI"
                 else
-                    rm -f "$temp_dosya"
+                    [ -f "$temp_dosya" ] && rm -f "$temp_dosya"
                     hata_sayisi=$((hata_sayisi + 1))
                 fi
 
@@ -195,4 +206,4 @@ ana_menu() {
 ana_menu
 EOF
 chmod +x ~/Video-kapak-resim-de-i-tirme/kapak_degistir.sh
-echo "Güncellendi!"
+echo "Kod temizlendi ve güncellendi!"
