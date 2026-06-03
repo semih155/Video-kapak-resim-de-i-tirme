@@ -62,7 +62,6 @@ ana_menu() {
             echo "  Son kullanılan klasör: ${VARSAYILAN_KLASOR:-'Yok'}"
             read -p "  Video Klasörü Tam Yolu: " girilen_klasor
 
-            # Eğer boş bırakılırsa ve eski klasör varsa eskisini kullan
             if [ -z "$girilen_klasor" ]; then
                 if [ -z "$VARSAYILAN_KLASOR" ]; then
                     echo "  İptal edildi."
@@ -81,7 +80,6 @@ ana_menu() {
             _kaydet_ayarlar
 
             TEMP_LIST="$HOME/.video_listesi_tmp.txt"
-            # Boşluklu isimler için find komutunu güvenli hale getirdik
             find "$VARSAYILAN_KLASOR" -maxdepth 1 \( -iname "*.mp4" -o -iname "*.mkv" \) > "$TEMP_LIST"
 
             toplam=$(wc -l < "$TEMP_LIST")
@@ -134,9 +132,10 @@ ana_menu() {
 
                 temp_dosya="$klasor/temp_${$}_${islem_sayisi}.mp4"
 
-                # FFmpeg komutundaki tüm değişkenleri tırnak içine alarak sabitledik
+                # -map -0:v:video_index komutu ile varsa eski attached_pic akışını devredışı bırakıyoruz
                 ffmpeg -i "$video" -i "$VARSAYILAN_RESIM" \
-                    -map 0 -map 1 -c copy \
+                    -map 0:v:0 -map 0:a? -map 0:s? -map 1 \
+                    -c copy \
                     -disposition:v:1 attached_pic \
                     "$temp_dosya" -y -loglevel quiet 2>/dev/null
 
@@ -206,4 +205,4 @@ ana_menu() {
 ana_menu
 EOF
 chmod +x ~/Video-kapak-resim-de-i-tirme/kapak_degistir.sh
-echo "Kod temizlendi ve güncellendi!"
+echo "Eski kapakları temizleme özelliği eklendi!"
