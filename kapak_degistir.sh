@@ -73,13 +73,11 @@ ana_menu() {
 
             VARSAYILAN_KLASOR="$girilen_klasor"
             _kaydet_ayarlar
-            cd "$VARSAYILAN_KLASOR"
 
-            toplam=0
-            for video in *.mp4 *.mkv; do
-                [ -e "$video" ] || continue
-                toplam=$((toplam + 1))
-            done
+            # find ile dosyaları güvenli şekilde al
+            mapfile -d '' video_listesi < <(find "$VARSAYILAN_KLASOR" -maxdepth 1 \( -iname "*.mp4" -o -iname "*.mkv" \) -print0 | sort -z)
+
+            toplam=${#video_listesi[@]}
 
             if [ $toplam -eq 0 ]; then
                 echo "  Bu klasörde hiç video bulunamadı!"
@@ -87,9 +85,9 @@ ana_menu() {
             fi
 
             zaten=0
-            for video in *.mp4 *.mkv; do
-                [ -e "$video" ] || continue
-                _zaten_islendi_mi "$video" && zaten=$((zaten + 1))
+            for video in "${video_listesi[@]}"; do
+                isim=$(basename "$video")
+                _zaten_islendi_mi "$isim" && zaten=$((zaten + 1))
             done
             islencek=$((toplam - zaten))
 
@@ -111,23 +109,27 @@ ana_menu() {
             islem_sayisi=0
             hata_sayisi=0
 
-            for video in *.mp4 *.mkv; do
-                [ -e "$video" ] || continue
-                _zaten_islendi_mi "$video" && continue
+            for video in "${video_listesi[@]}"; do
+                isim=$(basename "$video")
+                klasor=$(dirname "$video")
+
+                _zaten_islendi_mi "$isim" && continue
 
                 islem_sayisi=$((islem_sayisi + 1))
                 _ilerleme_goster "$islem_sayisi" "$islencek"
 
+                temp_dosya="$klasor/temp_$$_$islem_sayisi.mp4"
+
                 ffmpeg -i "$video" -i "$VARSAYILAN_RESIM" \
                     -map 0 -map 1 -c copy \
                     -disposition:v:1 attached_pic \
-                    "temp_$(basename "$video")" -y -loglevel quiet 2>/dev/null
+                    "$temp_dosya" -y -loglevel quiet 2>/dev/null
 
                 if [ $? -eq 0 ]; then
-                    mv "temp_$(basename "$video")" "$video"
-                    echo "$video" >> "$ISLENENLER_LISTESI"
+                    mv "$temp_dosya" "$video"
+                    echo "$isim" >> "$ISLENENLER_LISTESI"
                 else
-                    rm -f "temp_$(basename "$video")"
+                    rm -f "$temp_dosya"
                     hata_sayisi=$((hata_sayisi + 1))
                 fi
             done
