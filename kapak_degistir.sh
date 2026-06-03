@@ -74,21 +74,24 @@ ana_menu() {
             VARSAYILAN_KLASOR="$girilen_klasor"
             _kaydet_ayarlar
 
-            # find ile dosyaları güvenli şekilde al
-            mapfile -d '' video_listesi < <(find "$VARSAYILAN_KLASOR" -maxdepth 1 \( -iname "*.mp4" -o -iname "*.mkv" \) -print0 | sort -z)
+            # Geçici dosyaya yaz, sonra oku
+            TEMP_LIST="$HOME/.video_listesi_tmp.txt"
+            find "$VARSAYILAN_KLASOR" -maxdepth 1 \( -iname "*.mp4" -o -iname "*.mkv" \) > "$TEMP_LIST"
 
-            toplam=${#video_listesi[@]}
+            toplam=$(wc -l < "$TEMP_LIST")
 
-            if [ $toplam -eq 0 ]; then
+            if [ "$toplam" -eq 0 ]; then
                 echo "  Bu klasörde hiç video bulunamadı!"
+                rm -f "$TEMP_LIST"
                 sleep 2; ana_menu; return
             fi
 
             zaten=0
-            for video in "${video_listesi[@]}"; do
+            while IFS= read -r video; do
                 isim=$(basename "$video")
                 _zaten_islendi_mi "$isim" && zaten=$((zaten + 1))
-            done
+            done < "$TEMP_LIST"
+
             islencek=$((toplam - zaten))
 
             clear
@@ -100,8 +103,9 @@ ana_menu() {
             echo "  İşlenecek     : $islencek"
             echo "-----------------------------------------"
 
-            if [ $islencek -eq 0 ]; then
+            if [ "$islencek" -eq 0 ]; then
                 echo "  Tüm videolar zaten işlenmiş!"
+                rm -f "$TEMP_LIST"
                 read -p "  Enter'a bas..."
                 ana_menu; return
             fi
@@ -109,7 +113,7 @@ ana_menu() {
             islem_sayisi=0
             hata_sayisi=0
 
-            for video in "${video_listesi[@]}"; do
+            while IFS= read -r video; do
                 isim=$(basename "$video")
                 klasor=$(dirname "$video")
 
@@ -132,7 +136,10 @@ ana_menu() {
                     rm -f "$temp_dosya"
                     hata_sayisi=$((hata_sayisi + 1))
                 fi
-            done
+
+            done < "$TEMP_LIST"
+
+            rm -f "$TEMP_LIST"
 
             echo ""
             echo "-----------------------------------------"
