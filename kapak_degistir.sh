@@ -16,6 +16,7 @@ BLUE='\033[0;34m'; MAGENTA='\033[0;35m'; CYAN='\033[0;36m'; RESET='\033[0m'
 _kaydet_ayarlar() {
     echo "VARSAYILAN_KLASOR=\"$VARSAYILAN_KLASOR\"" > "$HOME/.kapak_ayarlari.conf"
     echo "VARSAYILAN_RESIM=\"$VARSAYILAN_RESIM\"" >> "$HOME/.kapak_ayarlari.conf"
+    echo "VARSAYILAN_MP3_KLASOR=\"$VARSAYILAN_MP3_KLASOR\"" >> "$HOME/.kapak_ayarlari.conf"
 }
 
 _zaten_islendi_mi() {
@@ -166,6 +167,95 @@ adlandirma_menu() {
 }
 
 # ─────────────────────────────────────────
+# VİDEOLARI MP3'E DÖNÜŞTÜRME MODÜLÜ (PREFIX DESTEKLİ)
+# ─────────────────────────────────────────
+mp3_donusturucu_menu() {
+    clear
+    echo "========================================="
+    echo "     VİDEO -> MP3 DÖNÜŞTÜRÜCÜ (TEYP UYUMLU)"
+    echo "========================================="
+    echo -e "  Hafızadaki Klasör: ${YELLOW}${VARSAYILAN_MP3_KLASOR:-'Yok'}${RESET}"
+    echo "-----------------------------------------"
+    echo "  Eski klasörü kullanmak için hiçbir şey yazmadan ENTER'a bas."
+    read -p "  Video Klasörü Tam Yolu: " girilen_mp3_klasor
+
+    if [ -z "$girilen_mp3_klasor" ]; then
+        if [ -z "$VARSAYILAN_MP3_KLASOR" ]; then
+            echo -e "${RED}  HATA: Hafızada klasör yok, bir yol girmelisiniz!${RESET}"
+            sleep 2; ana_menu; return
+        fi
+        girilen_mp3_klasor="$VARSAYILAN_MP3_KLASOR"
+    fi
+
+    if [ ! -d "$girilen_mp3_klasor" ]; then
+        echo -e "${RED}  HATA: Klasör bulunamadı: $girilen_mp3_klasor${RESET}"
+        sleep 2; ana_menu; return
+    fi
+
+    VARSAYILAN_MP3_KLASOR="$girilen_mp3_klasor"
+    _kaydet_ayarlar
+
+    TEMP_MP3_LIST="$HOME/.mp3_listesi_tmp.txt"
+    find "$VARSAYILAN_MP3_KLASOR" -maxdepth 1 \( -iname "*.mp4" -o -iname "*.mkv" -o -iname "*.webm" -o -iname "*.3gp" \) > "$TEMP_MP3_LIST"
+
+    toplam_mp3=$(wc -l < "$TEMP_MP3_LIST")
+
+    if [ "$toplam_mp3" -eq 0 ]; then
+        echo "  Bu klasörde dönüştürülecek hiç video bulunamadı!"
+        rm -f "$TEMP_MP3_LIST"
+        sleep 2; ana_menu; return
+    fi
+
+    CIKTI_MP3_DIR="$VARSAYILAN_MP3_KLASOR/MP3_Muzikler"
+    mkdir -p "$CIKTI_MP3_DIR"
+
+    clear
+    echo "========================================="
+    echo "         MP3 DÖNÜŞTÜRME BAŞLIYOR         "
+    echo "========================================="
+    echo "  Toplam Video Dosyası: $toplam_mp3"
+    echo "  Prefix Değeri       : $PREFIX"
+    echo "  Çıktı Klasörü       : $CIKTI_MP3_DIR"
+    echo "-----------------------------------------"
+
+    mp3_islem_sayisi=0
+    mp3_hata_sayisi=0
+
+    while IFS= read -r video; do
+        isim=$(basename "$video")
+        isim_base="${isim%.*}"
+        
+        # Eğer videonun adında zaten prefix varsa, tekrar eklememek için temiz isim tabanını alalım
+        if [[ "$isim_base" == "$PREFIX"* ]]; then
+            temiz_isim="${isim_base#$PREFIX}"
+        else
+            temiz_isim="$isim_base"
+        fi
+
+        mp3_islem_sayisi=$((mp3_islem_sayisi + 1))
+        _ilerleme_goster "$mp3_islem_sayisi" "$toplam_mp3"
+
+        # Teyp uyumlu yüksek kaliteli kodlama + İsmin başına PREFIX sabitleme
+        ffmpeg -i "$video" -vn -ar 44100 -ac 2 -b:a 192k "$CIKTI_MP3_DIR/${PREFIX}${temiz_isim}.mp3" -y -loglevel quiet 2>/dev/null
+
+        if [ $? -ne 0 ]; then
+            mp3_hata_sayisi=$((mp3_hata_sayisi + 1))
+        fi
+    done < "$TEMP_MP3_LIST"
+
+    rm -f "$TEMP_MP3_LIST"
+
+    echo ""
+    echo "-----------------------------------------"
+    echo -e "${GREEN}  ✓ Dönüştürme Tamamlandı!${RESET}"
+    echo "  Başarılı : $(((mp3_islem_sayisi - mp3_hata_sayisi))) MP3"
+    echo "  Hatalı    : $mp3_hata_sayisi dosya"
+    echo "========================================="
+    read -p "  Enter'a bas..."
+    ana_menu
+}
+
+# ─────────────────────────────────────────
 # ANA MENÜ
 # ─────────────────────────────────────────
 ana_menu() {
@@ -177,18 +267,20 @@ ana_menu() {
     echo "  Prefix : $PREFIX"
     echo "-----------------------------------------"
     echo "  1 - Videoların Kapağını Güncelle"
-    echo "      (Kapak değişir + prefix otomatik eklenir)"
-    echo "  2 - Hafızayı Sil (Tüm videoları tekrar işle)"
-    echo "  3 - Resim Ayarını Değiştir"
-    echo "  4 - Dosya Yeniden Adlandır"
-    echo "  5 - Çıkış"
+    echo "      (Hafızalı klasör yolu + otomatik kapak/prefix)"
+    echo "  2 - Videoları MP3'e Dönüştür (Prefix + Teyp Uyumlu)"
+    echo "      (Hafızalı klasör yolu + Oto Teyp formatı)"
+    echo "  3 - Hafızayı Sil (Tüm videoları tekrar işle)"
+    echo "  4 - Resim Ayarını Değiştir"
+    echo "  5 - Dosya Yeniden Adlandır"
+    echo "  6 - Çıkış"
     echo "========================================="
     read -p "Seçiminiz: " secim
 
     case $secim in
         1)
             if [ -z "$VARSAYILAN_RESIM" ]; then
-                echo "  HATA: Önce resim ayarını yapın! (Seçenek 3)"
+                echo "  HATA: Önce resim ayarını yapın! (Seçenek 4)"
                 sleep 2; ana_menu; return
             fi
 
@@ -198,12 +290,16 @@ ana_menu() {
             fi
 
             echo ""
-            echo "  Son kullanılan klasör: ${VARSAYILAN_KLASOR:-'Yok'}"
+            echo -e "  Hafızadaki Klasör: ${YELLOW}${VARSAYILAN_KLASOR:-'Yok'}${RESET}"
+            echo "  Eski klasörü kullanmak için hiçbir şey yazmadan ENTER'a bas."
             read -p "  Video Klasörü Tam Yolu: " girilen_klasor
 
             if [ -z "$girilen_klasor" ]; then
-                echo "  İptal edildi."
-                sleep 1; ana_menu; return
+                if [ -z "$VARSAYILAN_KLASOR" ]; then
+                    echo "  HATA: Hafızada klasör yok, bir yol girmelisiniz!"
+                    sleep 2; ana_menu; return
+                fi
+                girilen_klasor="$VARSAYILAN_KLASOR"
             fi
 
             if [ ! -d "$girilen_klasor" ]; then
@@ -269,15 +365,12 @@ ana_menu() {
                     "$temp_dosya" -y -loglevel quiet 2>/dev/null
 
                 if [ $? -eq 0 ]; then
-                    # Kapak değişti, şimdi prefix ekle (zaten prefix yoksa)
                     uzanti="${isim##*.}"
                     isim_base="${isim%.*}"
                     if [[ "$isim" == "$PREFIX"* ]]; then
-                        # Zaten prefix var, sadece taşı
                         mv "$temp_dosya" "$video"
                         yeni_isim="$isim"
                     else
-                        # Prefix ekle ve yeniden adlandır
                         yeni_isim="${PREFIX}${isim}"
                         mv "$temp_dosya" "$klasor/$yeni_isim"
                         rm -f "$video"
@@ -304,6 +397,10 @@ ana_menu() {
             ;;
 
         2)
+            mp3_donusturucu_menu
+            ;;
+
+        3)
             read -p "  Emin misiniz? (e/h): " onay
             if [ "$onay" = "e" ] || [ "$onay" = "E" ]; then
                 rm -f "$ISLENENLER_LISTESI" && touch "$ISLENENLER_LISTESI"
@@ -314,7 +411,7 @@ ana_menu() {
             sleep 1; ana_menu
             ;;
 
-        3)
+        4)
             echo ""
             echo "  Mevcut resim: ${VARSAYILAN_RESIM:-'Ayarlanmamış'}"
             read -p "  Yeni Resim Tam Yolu (boş bırakırsan değişmez): " yeni_r
@@ -332,11 +429,11 @@ ana_menu() {
             sleep 1; ana_menu
             ;;
 
-        4)
+        5)
             adlandirma_menu
             ;;
 
-        5)
+        6)
             echo "  Çıkılıyor..."
             exit 0
             ;;
