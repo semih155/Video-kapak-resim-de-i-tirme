@@ -44,13 +44,55 @@ _ilerleme_goster() {
 }
 
 # ─────────────────────────────────────────
+# KAPAK RESMİNİ UYUMLU JPG'E ÇEVİR
+# ─────────────────────────────────────────
+_kapak_jpg_hazirla() {
+    KAPAK_JPG=""
+    [ -z "$VARSAYILAN_RESIM" ] && return 1
+    [ ! -f "$VARSAYILAN_RESIM" ] && return 1
+
+    local hedef="$HOME/.kapak_cache.jpg"
+
+    if [ -f "$hedef" ] && [ -f "$HOME/.kapak_cache_src.txt" ]; then
+        local onceki_kaynak
+        onceki_kaynak=$(cat "$HOME/.kapak_cache_src.txt")
+        if [ "$onceki_kaynak" = "$VARSAYILAN_RESIM" ]; then
+            KAPAK_JPG="$hedef"
+            return 0
+        fi
+    fi
+
+    ffmpeg -i "$VARSAYILAN_RESIM" -vf "scale='min(1280,iw)':-2" \
+        -frames:v 1 "$hedef" -y -loglevel quiet 2>/dev/null
+
+    if [ -f "$hedef" ]; then
+        echo "$VARSAYILAN_RESIM" > "$HOME/.kapak_cache_src.txt"
+        KAPAK_JPG="$hedef"
+        return 0
+    fi
+
+    return 1
+}
+
+# ─────────────────────────────────────────
+# HATA LOGUNA YAZ
+# ─────────────────────────────────────────
+HATA_LOG="$HOME/hata_log.txt"
+_hata_logla() {
+    local mod="$1" dosya="$2" mesaj="$3"
+    {
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$mod] $dosya"
+        echo "  → $mesaj"
+        echo "---"
+    } >> "$HATA_LOG"
+}
+
+# ─────────────────────────────────────────
 # KAYNAK KLASÖR SEÇİM YARDIMCISI
-# Kullanım: _kaynak_sec "Başlık" "SON_DEG_ADI"
-# Seçilen yolu SECILEN_KLASOR değişkenine yazar
 # ─────────────────────────────────────────
 _kaynak_sec() {
     local baslik="$1"
-    local son_deger="$2"   # örn: "$SON_KAPAK_KLASOR"
+    local son_deger="$2"
 
     echo -e "\n${YELLOW}[ $baslik ]${RESET}"
     echo -e "  1) VidMate indirmeleri"
@@ -91,7 +133,6 @@ _kaynak_sec() {
 
 # ─────────────────────────────────────────
 # 1) KAPAK DEĞİŞTİRME
-# Aynı klasörde değişir — prefix ekler, kopya kalmaz
 # ─────────────────────────────────────────
 kapak_degistir_isle() {
     if [ -z "$VARSAYILAN_RESIM" ] || [ ! -f "$VARSAYILAN_RESIM" ]; then
@@ -110,7 +151,6 @@ kapak_degistir_isle() {
     [ $ret -eq 1 ] && { sleep 1; kapak_degistir_isle; return; }
     [ -z "$SECILEN_KLASOR" ] && { sleep 1; kapak_degistir_isle; return; }
 
-    # VidMate+SnapTube burada tek klasör olmaz, video kapak için tek yol lazım
     if [[ "$SECILEN_KLASOR" == "VidMate+SnapTube" ]]; then
         echo -e "${RED}Bu mod için tek bir klasör seçin.${RESET}"; sleep 2; kapak_degistir_isle; return
     fi
@@ -122,6 +162,13 @@ kapak_degistir_isle() {
 
     SON_KAPAK_KLASOR="$SECILEN_KLASOR"
     _kaydet_ayarlar
+
+    _kapak_jpg_hazirla
+    if [ -z "$KAPAK_JPG" ]; then
+        echo -e "  ${RED}HATA: Kapak resmi hazırlanamadı (dosya bozuk olabilir).${RESET}"
+        sleep 2; ana_menu; return
+    fi
+
 
     TEMP_LIST="$HOME/.video_listesi_tmp.txt"
     find "$SECILEN_KLASOR" -maxdepth 1 \( -iname "*.mp4" -o -iname "*.mkv" \) > "$TEMP_LIST"
@@ -153,7 +200,8 @@ kapak_degistir_isle() {
         rm -f "$TEMP_LIST"; read -p "  Enter'a bas..."; ana_menu; return
     fi
 
-    islem_sayisi=0; hata_sayisi=0
+    islem_sayisi=0; hata_sayisi=0; kapaksiz_sayisi=0
+    > "$HATA_LOG"
 
     while IFS= read -r video; do
         isim=$(basename "$video")
@@ -164,19 +212,31 @@ kapak_degistir_isle() {
         _ilerleme_goster "$islem_sayisi" "$islencek"
 
         temp_dosya="$klasor/.tmp_kapak_$$_${islem_sayisi}.mp4"
+        ffmpeg_err=$(mktemp)
 
-        ffmpeg -i "$video" -i "$VARSAYILAN_RESIM" \
-            -map 0 -map 1 -c copy \
+        ffmpeg -i "$video" -i "$KAPAK_JPG" \
+            -map 0 -map 1 -c copy -c:v:1 mjpeg \
             -disposition:v:1 attached_pic \
-            "$temp_dosya" -y -loglevel quiet 2>/dev/null
+            "$temp_dosya" -y -loglevel error 2> "$ffmpeg_err"
 
-        if [ $? -eq 0 ]; then
+        basarili=$?
+
+        if [ $basarili -ne 0 ]; then
+            rm -f "$temp_dosya"
+            ffmpeg -i "$video" -map 0 -c copy \
+                "$temp_dosya" -y -loglevel error 2> "$ffmpeg_err"
+            basarili=$?
+            if [ $basarili -eq 0 ]; then
+                kapaksiz_sayisi=$((kapaksiz_sayisi + 1))
+                _hata_logla "KAPAK" "$isim" "Kapak eklenemedi, kapaksız işlendi: $(tail -1 "$ffmpeg_err")"
+            fi
+        fi
+
+        if [ $basarili -eq 0 ]; then
             if [[ "$isim" == "$PREFIX"* ]]; then
-                # Zaten prefix var — sadece yerinde değiştir
                 mv "$temp_dosya" "$video"
                 yeni_isim="$isim"
             else
-                # Prefix ekle, eski dosyayı sil
                 yeni_isim="${PREFIX}${isim}"
                 mv "$temp_dosya" "$klasor/$yeni_isim"
                 rm -f "$video"
@@ -185,23 +245,30 @@ kapak_degistir_isle() {
         else
             rm -f "$temp_dosya"
             hata_sayisi=$((hata_sayisi + 1))
+            _hata_logla "KAPAK" "$isim" "Tamamen başarısız: $(tail -1 "$ffmpeg_err")"
         fi
+
+        rm -f "$ffmpeg_err"
     done < "$TEMP_LIST"
 
     rm -f "$TEMP_LIST"
     echo ""
     echo "-----------------------------------------"
     echo "  ✓ Tamamlandı!"
-    echo "  İşlenen : $islem_sayisi video"
-    echo "  Hata    : $hata_sayisi video"
-    echo "  Atlanan : $zaten video (zaten yapılmıştı)"
+    echo "  İşlenen        : $islem_sayisi video"
+    echo "  Kapaksız işlendi: $kapaksiz_sayisi video"
+    echo "  Hata           : $hata_sayisi video"
+    echo "  Atlanan        : $zaten video (zaten yapılmıştı)"
+    if [ "$hata_sayisi" -gt 0 ] || [ "$kapaksiz_sayisi" -gt 0 ]; then
+        echo "  Detaylar       : $HATA_LOG"
+    fi
     echo "========================================="
     read -p "  Enter'a bas..."
     ana_menu
 }
+
 # ─────────────────────────────────────────
 # 5) MP3 DÖNÜŞTÜRME
-# Video neredeyse MP3 oraya kaydedilir — kopya kalmaz
 # ─────────────────────────────────────────
 mp3_donustur_menu() {
     while true; do
@@ -221,7 +288,7 @@ mp3_donustur_menu() {
             echo -e "  ${RED}[0]      Ana Menüye Dön${RESET}"
             read -p "  Seçiminiz: " hizli_sec
             case "$hizli_sec" in
-                "") : ;;   # aynen devam
+                "") : ;;
                 0) ana_menu; return ;;
                 d|D)
                     _kaynak_sec "Kaynak Klasör Seçin" "$SON_MP3_KAYNAK"
@@ -243,7 +310,6 @@ mp3_donustur_menu() {
                 *) echo -e "${RED}Geçersiz seçim!${RESET}"; sleep 1; continue ;;
             esac
         else
-            # İlk kez
             _kaynak_sec "Kaynak Klasör Seçin" ""
             local ret=$?
             [ $ret -eq 2 ] && return
@@ -261,7 +327,6 @@ mp3_donustur_menu() {
             _kaydet_ayarlar
         fi
 
-        # Klasörleri belirle
         if [[ "$SON_MP3_KAYNAK" == "VidMate+SnapTube" ]]; then
             SRC_DIRS=("/storage/emulated/0/VidMate/download" "/storage/emulated/0/snaptube/download/SnapTube Video")
         else
@@ -292,14 +357,16 @@ mp3_donustur_menu() {
         echo -e "  Toplam : ${GREEN}${toplam} video${RESET}"
         echo -e "${CYAN}-----------------------------------------${RESET}"
 
-        basarili=0; hatali=0; atlanan=0; sayac=0
+        _kapak_jpg_hazirla
+
+        basarili=0; hatali=0; atlanan=0; sayac=0; kapaksiz_sayisi=0
+        > "$HATA_LOG"
 
         while IFS= read -r video; do
             [[ -z "$video" ]] && continue
             sayac=$((sayac + 1))
             isim=$(basename "$video")
             isim_base="${isim%.*}"
-            # MP3 videoyla aynı klasöre
             cikti_dosya="$(dirname "$video")/${isim_base}.mp3"
 
             if [[ -f "$cikti_dosya" ]]; then
@@ -308,34 +375,59 @@ mp3_donustur_menu() {
             fi
 
             _ilerleme_goster "$sayac" "$toplam"
-
-            if [[ -n "$VARSAYILAN_RESIM" && -f "$VARSAYILAN_RESIM" ]]; then
-                ffmpeg -i "$video" -i "$VARSAYILAN_RESIM" \
+            ffmpeg_err=$(mktemp)
+            kapakli=0
+if [ -n "$KAPAK_JPG" ]; then
+                ffmpeg -i "$video" -i "$KAPAK_JPG" \
                     -map 0:a:0 -map 1:0 \
                     -acodec libmp3lame -ab "$MP3_KALITE" -ar 44100 \
+                    -c:v:0 mjpeg \
                     -metadata:s:v title="Album cover" \
                     -metadata:s:v comment="Cover (front)" \
-                    "$cikti_dosya" -y -loglevel quiet 2>/dev/null
+                    "$cikti_dosya" -y -loglevel error 2> "$ffmpeg_err"
+                sonuc=$?
+                [ $sonuc -eq 0 ] && kapakli=1
             else
-                ffmpeg -i "$video" -vn \
-                    -acodec libmp3lame -ab "$MP3_KALITE" -ar 44100 \
-                    "$cikti_dosya" -y -loglevel quiet 2>/dev/null
+                sonuc=1
             fi
 
-            if [[ $? -eq 0 ]]; then
-                echo -e "\n${GREEN}✓ Dönüştürüldü:${RESET} ${isim_base}.mp3"
+            if [ $sonuc -ne 0 ]; then
+                rm -f "$cikti_dosya"
+                ffmpeg -i "$video" -vn \
+                    -acodec libmp3lame -ab "$MP3_KALITE" -ar 44100 \
+                    "$cikti_dosya" -y -loglevel error 2> "$ffmpeg_err"
+                sonuc=$?
+                if [ $sonuc -eq 0 ] && [ -n "$KAPAK_JPG" ]; then
+                    kapaksiz_sayisi=$((kapaksiz_sayisi + 1))
+                    _hata_logla "MP3" "$isim" "Kapaklı dönüştürme başarısız, kapaksız yapıldı: $(tail -1 "$ffmpeg_err")"
+                fi
+            fi
+
+            if [ $sonuc -eq 0 ]; then
+                if [ $kapakli -eq 1 ]; then
+                    echo -e "\n${GREEN}✓ Dönüştürüldü (kapaklı):${RESET} ${isim_base}.mp3"
+                else
+                    echo -e "\n${GREEN}✓ Dönüştürüldü:${RESET} ${isim_base}.mp3"
+                fi
                 ((basarili++))
             else
                 echo -e "\n${RED}✗ Hata:${RESET} $isim"
                 ((hatali++)); rm -f "$cikti_dosya"
+                _hata_logla "MP3" "$isim" "Tamamen başarısız: $(tail -1 "$ffmpeg_err")"
             fi
+
+            rm -f "$ffmpeg_err"
         done < "$VIDEO_LISTESI"
 
         rm -f "$VIDEO_LISTESI"
         echo -e "\n${MAGENTA}=========================================${RESET}"
-        echo -e "${GREEN}✓ Başarılı : $basarili${RESET}"
-        echo -e "${BLUE}→ Atlanan  : $atlanan${RESET}"
-        echo -e "${RED}✗ Hatalı   : $hatali${RESET}"
+        echo -e "${GREEN}✓ Başarılı       : $basarili${RESET}"
+        echo -e "${YELLOW}  (kapaksız)     : $kapaksiz_sayisi${RESET}"
+        echo -e "${BLUE}→ Atlanan        : $atlanan${RESET}"
+        echo -e "${RED}✗ Hatalı         : $hatali${RESET}"
+        if [ "$hatali" -gt 0 ] || [ "$kapaksiz_sayisi" -gt 0 ]; then
+            echo -e "${CYAN}  Detaylar       : $HATA_LOG${RESET}"
+        fi
         echo -e "${MAGENTA}=========================================${RESET}"
         read -p $'\nAna menüye dönmek için Enter...' _
         ana_menu; return
@@ -344,7 +436,6 @@ mp3_donustur_menu() {
 
 # ─────────────────────────────────────────
 # 6) MÜZİKLERE KAPAK RESMİ EKLE
-# Dosya yerinde değişir — kopya kalmaz
 # ─────────────────────────────────────────
 muzik_kapak_menu() {
     while true; do
@@ -429,7 +520,14 @@ muzik_kapak_menu() {
         echo -e "  Not    : ${CYAN}Dosyalar yerinde değiştirilir${RESET}"
         echo -e "${CYAN}-----------------------------------------${RESET}"
 
+        _kapak_jpg_hazirla
+        if [ -z "$KAPAK_JPG" ]; then
+            echo -e "  ${RED}HATA: Kapak resmi hazırlanamadı!${RESET}"
+            rm -f "$MUZIK_LISTESI"; sleep 2; continue
+        fi
+
         basarili=0; hatali=0; sayac=0
+        > "$HATA_LOG"
 
         while IFS= read -r muzik; do
             [[ -z "$muzik" ]] && continue
@@ -440,38 +538,37 @@ muzik_kapak_menu() {
 
             _ilerleme_goster "$sayac" "$toplam"
 
-            # Gizli temp dosya — aynı klasörde
             temp_muzik="$klasor/.tmp_kapak_$$_${sayac}.${uzanti}"
+            ffmpeg_err=$(mktemp)
 
             case "${uzanti,,}" in
                 mp3)
-                    ffmpeg -i "$muzik" -i "$VARSAYILAN_RESIM" \
-                        -map 0:a:0 -map 1:0 -acodec copy \
+                    ffmpeg -i "$muzik" -i "$KAPAK_JPG" \
+                        -map 0:a:0 -map 1:0 -acodec copy -c:v:0 mjpeg \
                         -metadata:s:v title="Album cover" \
                         -metadata:s:v comment="Cover (front)" \
-                        "$temp_muzik" -y -loglevel quiet 2>/dev/null
+                        "$temp_muzik" -y -loglevel error 2> "$ffmpeg_err"
                     ;;
                 m4a|aac)
-                    ffmpeg -i "$muzik" -i "$VARSAYILAN_RESIM" \
-                        -map 0:a:0 -map 1:0 -acodec copy \
+                    ffmpeg -i "$muzik" -i "$KAPAK_JPG" \
+                        -map 0:a:0 -map 1:0 -acodec copy -c:v:0 mjpeg \
                         -disposition:v:0 attached_pic \
-                        "$temp_muzik" -y -loglevel quiet 2>/dev/null
+                        "$temp_muzik" -y -loglevel error 2> "$ffmpeg_err"
                     ;;
                 flac)
-                    ffmpeg -i "$muzik" -i "$VARSAYILAN_RESIM" \
-                        -map 0 -map 1:0 -acodec copy \
+                    ffmpeg -i "$muzik" -i "$KAPAK_JPG" \
+                        -map 0 -map 1:0 -acodec copy -c:v:0 mjpeg \
                         -disposition:v:0 attached_pic \
-                        "$temp_muzik" -y -loglevel quiet 2>/dev/null
+                        "$temp_muzik" -y -loglevel error 2> "$ffmpeg_err"
                     ;;
                 *)
-                    ffmpeg -i "$muzik" -i "$VARSAYILAN_RESIM" \
-                        -map 0:a:0 -map 1:0 -acodec copy \
-                        "$temp_muzik" -y -loglevel quiet 2>/dev/null
+                    ffmpeg -i "$muzik" -i "$KAPAK_JPG" \
+                        -map 0:a:0 -map 1:0 -acodec copy -c:v:0 mjpeg \
+                        "$temp_muzik" -y -loglevel error 2> "$ffmpeg_err"
                     ;;
             esac
 
             if [[ $? -eq 0 ]]; then
-                # Başarılı: temp → orijinalin üstüne yaz
                 mv "$temp_muzik" "$muzik"
                 echo -e "\n${GREEN}✓ Kapak eklendi:${RESET} $isim"
                 ((basarili++))
@@ -479,13 +576,18 @@ muzik_kapak_menu() {
                 rm -f "$temp_muzik"
                 echo -e "\n${RED}✗ Hata:${RESET} $isim"
                 ((hatali++))
+                _hata_logla "MUZIK" "$isim" "$(tail -1 "$ffmpeg_err")"
             fi
+            rm -f "$ffmpeg_err"
         done < "$MUZIK_LISTESI"
 
         rm -f "$MUZIK_LISTESI"
         echo -e "\n${MAGENTA}=========================================${RESET}"
         echo -e "${GREEN}✓ Başarılı : $basarili${RESET}"
         echo -e "${RED}✗ Hatalı   : $hatali${RESET}"
+        if [ "$hatali" -gt 0 ]; then
+            echo -e "${CYAN}  Detaylar : $HATA_LOG${RESET}"
+        fi
         echo -e "${MAGENTA}=========================================${RESET}"
         read -p $'\nAna menüye dönmek için Enter...' _
         ana_menu; return
@@ -580,6 +682,7 @@ adlandirma_menu() {
         ana_menu; return
     done
 }
+
 # ─────────────────────────────────────────
 # ANA MENÜ
 # ─────────────────────────────────────────
@@ -637,3 +740,5 @@ ana_menu
 EOF
 chmod +x ~/Video-kapak-resim-de-i-tirme/kapak_degistir.sh
 echo "Güncellendi!"
+
+
