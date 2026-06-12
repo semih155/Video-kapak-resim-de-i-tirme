@@ -3,6 +3,36 @@ cat > ~/Video-kapak-resim-de-i-tirme/kapak_degistir.sh << 'EOF'
 
 [ -f "$HOME/.kapak_ayarlari.conf" ] && source "$HOME/.kapak_ayarlari.conf"
 
+# ─────────────────────────────────────────
+# KİLİT KONTROLÜ
+# Aynı anda 2. kopya çalışmasını engeller.
+# (İki işlem aynı dosyaları aynı anda
+#  taşırsa "No such file or directory" hatası olur)
+# ─────────────────────────────────────────
+KILIT_DOSYA="$HOME/.kapak_script.lock"
+
+if [ -f "$KILIT_DOSYA" ]; then
+    eski_pid=$(cat "$KILIT_DOSYA" 2>/dev/null)
+    if [ -n "$eski_pid" ] && kill -0 "$eski_pid" 2>/dev/null; then
+        echo ""
+        echo "========================================="
+        echo "  ⚠️  UYARI: Script zaten çalışıyor!"
+        echo "========================================="
+        echo "  Aynı anda 2 kopya çalıştırmak dosyaların"
+        echo "  birbirini bozmasına yol açar."
+        echo ""
+        echo "  Diğer terminal/oturumdaki script'i"
+        echo "  kapatıp tekrar dene."
+        echo "========================================="
+        exit 1
+    fi
+fi
+
+echo $$ > "$KILIT_DOSYA"
+
+# Script ne şekilde olursa olsun kapanırken kilidi sil
+trap 'rm -f "$KILIT_DOSYA"' EXIT
+
 ISLENENLER_LISTESI="$HOME/.islenenler.txt"
 touch "$ISLENENLER_LISTESI"
 
@@ -45,6 +75,10 @@ _ilerleme_goster() {
 
 # ─────────────────────────────────────────
 # KAPAK RESMİNİ UYUMLU JPG'E ÇEVİR
+# Bazı PNG/WEBP resimler ffmpeg'de "-c copy" ile
+# kapak olarak eklenince hata verebiliyor.
+# Bu yüzden önce standart JPG'e dönüştürüp
+# o sürümü kullanıyoruz. KAPAK_JPG değişkenine yazar.
 # ─────────────────────────────────────────
 _kapak_jpg_hazirla() {
     KAPAK_JPG=""
@@ -53,6 +87,7 @@ _kapak_jpg_hazirla() {
 
     local hedef="$HOME/.kapak_cache.jpg"
 
+    # Zaten hazırlanmışsa ve kaynak değişmemişse tekrar üretme
     if [ -f "$hedef" ] && [ -f "$HOME/.kapak_cache_src.txt" ]; then
         local onceki_kaynak
         onceki_kaynak=$(cat "$HOME/.kapak_cache_src.txt")
@@ -89,10 +124,12 @@ _hata_logla() {
 
 # ─────────────────────────────────────────
 # KAYNAK KLASÖR SEÇİM YARDIMCISI
+# Kullanım: _kaynak_sec "Başlık" "SON_DEG_ADI"
+# Seçilen yolu SECILEN_KLASOR değişkenine yazar
 # ─────────────────────────────────────────
 _kaynak_sec() {
     local baslik="$1"
-    local son_deger="$2"
+    local son_deger="$2"   # örn: "$SON_KAPAK_KLASOR"
 
     echo -e "\n${YELLOW}[ $baslik ]${RESET}"
     echo -e "  1) VidMate indirmeleri"
@@ -133,6 +170,7 @@ _kaynak_sec() {
 
 # ─────────────────────────────────────────
 # 1) KAPAK DEĞİŞTİRME
+# Aynı klasörde değişir — prefix ekler, kopya kalmaz
 # ─────────────────────────────────────────
 kapak_degistir_isle() {
     if [ -z "$VARSAYILAN_RESIM" ] || [ ! -f "$VARSAYILAN_RESIM" ]; then
@@ -151,6 +189,7 @@ kapak_degistir_isle() {
     [ $ret -eq 1 ] && { sleep 1; kapak_degistir_isle; return; }
     [ -z "$SECILEN_KLASOR" ] && { sleep 1; kapak_degistir_isle; return; }
 
+    # VidMate+SnapTube burada tek klasör olmaz, video kapak için tek yol lazım
     if [[ "$SECILEN_KLASOR" == "VidMate+SnapTube" ]]; then
         echo -e "${RED}Bu mod için tek bir klasör seçin.${RESET}"; sleep 2; kapak_degistir_isle; return
     fi
@@ -163,12 +202,12 @@ kapak_degistir_isle() {
     SON_KAPAK_KLASOR="$SECILEN_KLASOR"
     _kaydet_ayarlar
 
+    # Kapak resmini uyumlu JPG'e çevir
     _kapak_jpg_hazirla
     if [ -z "$KAPAK_JPG" ]; then
         echo -e "  ${RED}HATA: Kapak resmi hazırlanamadı (dosya bozuk olabilir).${RESET}"
         sleep 2; ana_menu; return
     fi
-
 
     TEMP_LIST="$HOME/.video_listesi_tmp.txt"
     find "$SECILEN_KLASOR" -maxdepth 1 \( -iname "*.mp4" -o -iname "*.mkv" \) > "$TEMP_LIST"
@@ -214,6 +253,7 @@ kapak_degistir_isle() {
         temp_dosya="$klasor/.tmp_kapak_$$_${islem_sayisi}.mp4"
         ffmpeg_err=$(mktemp)
 
+        # 1. Deneme: Kapak resmini ekleyerek (stream copy)
         ffmpeg -i "$video" -i "$KAPAK_JPG" \
             -map 0 -map 1 -c copy -c:v:1 mjpeg \
             -disposition:v:1 attached_pic \
@@ -221,6 +261,7 @@ kapak_degistir_isle() {
 
         basarili=$?
 
+        # 2. Deneme (1. başarısızsa): Kapak eklemeden, sadece prefix için yeniden paketle
         if [ $basarili -ne 0 ]; then
             rm -f "$temp_dosya"
             ffmpeg -i "$video" -map 0 -c copy \
@@ -234,9 +275,11 @@ kapak_degistir_isle() {
 
         if [ $basarili -eq 0 ]; then
             if [[ "$isim" == "$PREFIX"* ]]; then
+                # Zaten prefix var — sadece yerinde değiştir
                 mv "$temp_dosya" "$video"
                 yeni_isim="$isim"
             else
+                # Prefix ekle, eski dosyayı sil
                 yeni_isim="${PREFIX}${isim}"
                 mv "$temp_dosya" "$klasor/$yeni_isim"
                 rm -f "$video"
@@ -269,6 +312,7 @@ kapak_degistir_isle() {
 
 # ─────────────────────────────────────────
 # 5) MP3 DÖNÜŞTÜRME
+# Video neredeyse MP3 oraya kaydedilir — kopya kalmaz
 # ─────────────────────────────────────────
 mp3_donustur_menu() {
     while true; do
@@ -288,7 +332,7 @@ mp3_donustur_menu() {
             echo -e "  ${RED}[0]      Ana Menüye Dön${RESET}"
             read -p "  Seçiminiz: " hizli_sec
             case "$hizli_sec" in
-                "") : ;;
+                "") : ;;   # aynen devam
                 0) ana_menu; return ;;
                 d|D)
                     _kaynak_sec "Kaynak Klasör Seçin" "$SON_MP3_KAYNAK"
@@ -310,6 +354,7 @@ mp3_donustur_menu() {
                 *) echo -e "${RED}Geçersiz seçim!${RESET}"; sleep 1; continue ;;
             esac
         else
+            # İlk kez
             _kaynak_sec "Kaynak Klasör Seçin" ""
             local ret=$?
             [ $ret -eq 2 ] && return
@@ -327,6 +372,7 @@ mp3_donustur_menu() {
             _kaydet_ayarlar
         fi
 
+        # Klasörleri belirle
         if [[ "$SON_MP3_KAYNAK" == "VidMate+SnapTube" ]]; then
             SRC_DIRS=("/storage/emulated/0/VidMate/download" "/storage/emulated/0/snaptube/download/SnapTube Video")
         else
@@ -357,6 +403,7 @@ mp3_donustur_menu() {
         echo -e "  Toplam : ${GREEN}${toplam} video${RESET}"
         echo -e "${CYAN}-----------------------------------------${RESET}"
 
+        # Kapak resmini uyumlu JPG'e çevir (varsa)
         _kapak_jpg_hazirla
 
         basarili=0; hatali=0; atlanan=0; sayac=0; kapaksiz_sayisi=0
@@ -367,6 +414,7 @@ mp3_donustur_menu() {
             sayac=$((sayac + 1))
             isim=$(basename "$video")
             isim_base="${isim%.*}"
+            # MP3 videoyla aynı klasöre
             cikti_dosya="$(dirname "$video")/${isim_base}.mp3"
 
             if [[ -f "$cikti_dosya" ]]; then
@@ -377,7 +425,8 @@ mp3_donustur_menu() {
             _ilerleme_goster "$sayac" "$toplam"
             ffmpeg_err=$(mktemp)
             kapakli=0
-if [ -n "$KAPAK_JPG" ]; then
+
+            if [ -n "$KAPAK_JPG" ]; then
                 ffmpeg -i "$video" -i "$KAPAK_JPG" \
                     -map 0:a:0 -map 1:0 \
                     -acodec libmp3lame -ab "$MP3_KALITE" -ar 44100 \
@@ -391,6 +440,7 @@ if [ -n "$KAPAK_JPG" ]; then
                 sonuc=1
             fi
 
+            # Kapaklı deneme başarısızsa, kapaksız dene
             if [ $sonuc -ne 0 ]; then
                 rm -f "$cikti_dosya"
                 ffmpeg -i "$video" -vn \
@@ -436,6 +486,7 @@ if [ -n "$KAPAK_JPG" ]; then
 
 # ─────────────────────────────────────────
 # 6) MÜZİKLERE KAPAK RESMİ EKLE
+# Dosya yerinde değişir — kopya kalmaz
 # ─────────────────────────────────────────
 muzik_kapak_menu() {
     while true; do
@@ -520,6 +571,7 @@ muzik_kapak_menu() {
         echo -e "  Not    : ${CYAN}Dosyalar yerinde değiştirilir${RESET}"
         echo -e "${CYAN}-----------------------------------------${RESET}"
 
+        # Kapak resmini uyumlu JPG'e çevir
         _kapak_jpg_hazirla
         if [ -z "$KAPAK_JPG" ]; then
             echo -e "  ${RED}HATA: Kapak resmi hazırlanamadı!${RESET}"
@@ -538,6 +590,7 @@ muzik_kapak_menu() {
 
             _ilerleme_goster "$sayac" "$toplam"
 
+            # Gizli temp dosya — aynı klasörde
             temp_muzik="$klasor/.tmp_kapak_$$_${sayac}.${uzanti}"
             ffmpeg_err=$(mktemp)
 
@@ -569,6 +622,7 @@ muzik_kapak_menu() {
             esac
 
             if [[ $? -eq 0 ]]; then
+                # Başarılı: temp → orijinalin üstüne yaz
                 mv "$temp_muzik" "$muzik"
                 echo -e "\n${GREEN}✓ Kapak eklendi:${RESET} $isim"
                 ((basarili++))
@@ -740,5 +794,3 @@ ana_menu
 EOF
 chmod +x ~/Video-kapak-resim-de-i-tirme/kapak_degistir.sh
 echo "Güncellendi!"
-
-
