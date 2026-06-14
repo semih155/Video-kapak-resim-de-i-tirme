@@ -1,589 +1,125 @@
 cat > ~/Video-kapak-resim-de-i-tirme/kapak_degistir.sh << 'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 
+# --- OTOMATİK TEMİZLİK ---
+MEVCUT_PID=$$
+ESKI_SURECLER=$(pgrep -f "kapak_degistir.sh")
+for pid in $ESKI_SURECLER; do
+    if [ "$pid" != "$MEVCUT_PID" ]; then kill -9 "$pid" 2>/dev/null; fi
+done
+
 [ -f "$HOME/.kapak_ayarlari.conf" ] && source "$HOME/.kapak_ayarlari.conf"
-
-# PC Modu başlangıç ayarları (Yoksa varsayılan ata)
-: "${PC_MODE:=OFF}"
-: "${PC_IP:=""}"
-: "${PC_USER:=""}"
-
-# ─────────────────────────────────────────
-# KİLİT KONTROLÜ
-# Aynı anda 2. kopya çalışmasını engeller.
-# ─────────────────────────────────────────
-KILIT_DOSYA="$HOME/.kapak_script.lock"
-
-if [ -f "$KILIT_DOSYA" ]; then
-    eski_pid=$(cat "$KILIT_DOSYA" 2>/dev/null)
-    if [ -n "$eski_pid" ] && kill -0 "$eski_pid" 2>/dev/null; then
-        echo ""
-        echo "========================================="
-        echo "  ⚠️  UYARI: Script zaten çalışıyor!"
-        echo "========================================="
-        echo "  Aynı anda 2 kopya çalıştırmak dosyaların"
-        echo "  birbirini bozmasına yol açar."
-        echo ""
-        echo "  Diğer terminal/oturumdaki script'i"
-        echo "  kapatıp tekrar dene."
-        echo "========================================="
-        exit 1
-    fi
-fi
-
-echo $$ > "$KILIT_DOSYA"
-
-# Script ne şekilde olursa olsun kapanırken kilidi sil
-trap 'rm -f "$KILIT_DOSYA"' EXIT
-
 ISLENENLER_LISTESI="$HOME/.islenenler.txt"
 touch "$ISLENENLER_LISTESI"
 
 PREFIX="〖ذال فیلم تقدیم میکندょ〗"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; MAGENTA='\033[0;35m'; CYAN='\033[0;36m'; RESET='\033[0m'
+# Neon Renk Seti
+RED='\033[1;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'
+BLUE='\033[1;34m'; MAGENTA='\033[1;35m'; CYAN='\033[1;36m'
+WHITE='\033[1;37m'; RESET='\033[0m'
 
-# ─────────────────────────────────────────
-# AYARLARI KAYDET
-# ─────────────────────────────────────────
 _kaydet_ayarlar() {
-    cat > "$HOME/.kapak_ayarlari.conf" << CONF
-VARSAYILAN_RESIM="$VARSAYILAN_RESIM"
-SON_KAPAK_KLASOR="$SON_KAPAK_KLASOR"
-PC_MODE="$PC_MODE"
-PC_IP="$PC_IP"
-PC_USER="$PC_USER"
-CONF
+    echo "VARSAYILAN_KLASOR=\"$VARSAYILAN_KLASOR\"" > "$HOME/.kapak_ayarlari.conf"
+    echo "VARSAYILAN_RESIM=\"$VARSAYILAN_RESIM\"" >> "$HOME/.kapak_ayarlari.conf"
+    echo "VARSAYILAN_MP3_KLASOR=\"$VARSAYILAN_MP3_KLASOR\"" >> "$HOME/.kapak_ayarlari.conf"
 }
 
 _zaten_islendi_mi() {
     local aranan="$1"
-    while IFS= read -r satir; do
-        [ "$satir" = "$aranan" ] && return 0
-    done < "$ISLENENLER_LISTESI"
+    while IFS= read -r satir; do [ "$satir" = "$aranan" ] && return 0; done < "$ISLENENLER_LISTESI"
     return 1
 }
 
 _ilerleme_goster() {
-    local mevcut=$1 toplam=$2
+    local mevcut=$1; local toplam=$2
     local yuzde=$(( mevcut * 100 / toplam ))
-    local dolu=$(( yuzde / 5 )) bos=$(( 20 - yuzde / 5 ))
+    local dolu=$(( yuzde / 5 )); local bos=$(( 20 - dolu ))
     local bar=""
     for ((i=0; i<dolu; i++)); do bar+="█"; done
     for ((i=0; i<bos; i++));  do bar+="░"; done
-    printf "\r  [%s] %3d%%  (%d/%d)" "$bar" "$yuzde" "$mevcut" "$toplam"
+    printf "\r  ${CYAN}[${GREEN}%s${CYAN}] ${YELLOW}%3d%% ${MAGENTA}(%d/%d)${RESET}" "$bar" "$yuzde" "$mevcut" "$toplam"
 }
 
-# ─────────────────────────────────────────
-# KAPAK RESMİNİ UYUMLU JPG'E ÇEVİR (PC modunda PC'ye atar)
-# ─────────────────────────────────────────
-_kapak_jpg_hazirla() {
-    KAPAK_JPG=""
-    [ -z "$VARSAYILAN_RESIM" ] && return 1
-    [ ! -f "$VARSAYILAN_RESIM" ] && return 1
-
-    local hedef="$HOME/.kapak_cache.jpg"
-
-    if [ -f "$hedef" ] && [ -f "$HOME/.kapak_cache_src.txt" ]; then
-        local onceki_kaynak
-        onceki_kaynak=$(cat "$HOME/.kapak_cache_src.txt")
-        if [ "$onceki_kaynak" = "$VARSAYILAN_RESIM" ]; then
-            KAPAK_JPG="$hedef"
-            if [[ "$PC_MODE" == "ON" ]]; then
-                # PC modundaysak resmi bir kereye mahsus bilgisayarın geçici klasörüne gönderiyoruz
-                scp "$hedef" "${PC_USER}@${PC_IP}:%TEMP%/pc_kapak_cache.jpg" >/dev/null 2>&1
-                KAPAK_JPG="%TEMP%/pc_kapak_cache.jpg"
-            fi
-            return 0
-        fi
-    fi
-
-    ffmpeg -i "$VARSAYILAN_RESIM" -vf "scale='min(1280,iw)':-2" \
-        -frames:v 1 "$hedef" -y -loglevel quiet 2>/dev/null
-
-    if [ -f "$hedef" ]; then
-        echo "$VARSAYILAN_RESIM" > "$HOME/.kapak_cache_src.txt"
-        KAPAK_JPG="$hedef"
-        if [[ "$PC_MODE" == "ON" ]]; then
-            scp "$hedef" "${PC_USER}@${PC_IP}:%TEMP%/pc_kapak_cache.jpg" >/dev/null 2>&1
-            KAPAK_JPG="%TEMP%/pc_kapak_cache.jpg"
-        fi
-        return 0
-    fi
-
-    return 1
-}
-
-# ─────────────────────────────────────────
-# HATA LOGUNA YAZ
-# ─────────────────────────────────────────
-HATA_LOG="$HOME/hata_log.txt"
-_hata_logla() {
-    local mod="$1" dosya="$2" mesaj="$3"
-    {
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$mod] $dosya"
-        echo "  → $mesaj"
-        echo "---"
-    } >> "$HATA_LOG"
-}
-
-# ─────────────────────────────────────────
-# KAYNAK KLASÖR SEÇİM YARDIMCISI
-# ─────────────────────────────────────────
-_kaynak_sec() {
-    local baslik="$1"
-    local son_deger="$2"
-
-    echo -e "\n${YELLOW}[ $baslik ]${RESET}"
-    
-    if [[ "$PC_MODE" == "ON" ]]; then
-        echo -e "  1) Bilgisayar D:\\ Sürücüsü"
-        echo -e "  2) Bilgisayar C:\\ Sürücüsü (Kullanıcı Klasörü)"
-        echo -e "  3) Özel Windows Dizin Yolu Belirt"
-    else
-        echo -e "  1) VidMate indirmeleri"
-        echo -e "  2) SnapTube indirmeleri"
-        echo -e "  3) VidMate & SnapTube birlikte"
-        echo -e "  4) Telegram videoları"
-        echo -e "  5) Özel dizin belirt"
-    fi
-    
-    if [ -n "$son_deger" ]; then
-        echo -e "  ${GREEN}[Enter] Son kullanılan: $son_deger${RESET}"
-    fi
-    echo -e "  0) Ana Menüye Dön"
-    read -p "Seçiminiz: " _src
-
-    if [[ "$PC_MODE" == "ON" ]]; then
-        case "$_src" in
-            "") [ -n "$son_deger" ] && SECILEN_KLASOR="$son_deger" || { echo -e "${RED}Kayıtlı klasör yok!${RESET}"; SECILEN_KLASOR=""; return 1; } ;;
-            1) SECILEN_KLASOR="D:/" ;;
-            2) SECILEN_KLASOR="C:/Users/${PC_USER}/Videos" ;;
-            3)
-               read -p "Windows Dizin Yolunu Girin (Örn: D:/Klasor/Videolar): " _custom
-               SECILEN_KLASOR="$_custom"
-               ;;
-            0) ana_menu; return 2 ;;
-            *) echo -e "${RED}Geçersiz seçim!${RESET}"; SECILEN_KLASOR=""; return 1 ;;
-        esac
-    else
-        case "$_src" in
-            "") [ -n "$son_deger" ] && SECILEN_KLASOR="$son_deger" || { echo -e "${RED}Kayıtlı klasör yok!${RESET}"; SECILEN_KLASOR=""; return 1; } ;;
-            1) SECILEN_KLASOR="/storage/emulated/0/VidMate/download" ;;
-            2) SECILEN_KLASOR="/storage/emulated/0/snaptube/download/SnapTube Video" ;;
-            3) SECILEN_KLASOR="VidMate+SnapTube" ;;
-            4) SECILEN_KLASOR="/storage/emulated/0/Android/media/org.telegram.messenger/Telegram/Telegram Video" ;;
-            5)
-               read -p "Dizin yolunu girin: " _custom
-               if [ -z "$_custom" ] || [ ! -d "$_custom" ]; then
-                   echo -e "${RED}Geçersiz dizin!${RESET}"; SECILEN_KLASOR=""; return 1
-               fi
-               SECILEN_KLASOR="$_custom"
-               ;;
-            0) ana_menu; return 2 ;;
-            *) echo -e "${RED}Geçersiz seçim!${RESET}"; SECILEN_KLASOR=""; return 1 ;;
-        esac
-    fi
-    return 0
-}
-
-# ─────────────────────────────────────────
-# 1) KAPAK DEĞİŞTİRME
-# ─────────────────────────────────────────
-kapak_degistir_isle() {
-    if [ -z "$VARSAYILAN_RESIM" ] || [ ! -f "$VARSAYILAN_RESIM" ]; then
-        echo -e "  ${RED}HATA: Önce resim ayarını yapın! (Seçenek 3)${RESET}"
-        sleep 2; ana_menu; return
-    fi
-
-    if [[ "$PC_MODE" == "ON" ]]; then
-        if [ -z "$PC_IP" ] || [ -z "$PC_USER" ]; then
-            echo -e "  ${RED}HATA: Önce Bilgisayar SSH bağlantı ayarlarını yapın! (Seçenek 6)${RESET}"
-            sleep 2; ana_menu; return
-        fi
-        echo -e "${YELLOW}Bilgisayara bağlantı test ediliyor...${RESET}"
-        ssh -o ConnectTimeout=3 "${PC_USER}@${PC_IP}" "echo 1" >/dev/null 2>&1
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}HATA: Bilgisayara bağlanılamadı! IP adresini veya OpenSSH Sunucusunu kontrol edin.${RESET}"
-            sleep 3; ana_menu; return
-        fi
-    fi
-
+mp3_donusturucu_menu() {
     clear
-    echo -e "${CYAN}=========================================${RESET}"
-    echo -e "${CYAN}      Kapak Değiştirme - Klasör Seç [PC MODE: $PC_MODE]${RESET}"
-    echo -e "${CYAN}=========================================${RESET}"
-
-    _kaynak_sec "Video Klasörü Seçin" "$SON_KAPAK_KLASOR"
-    local ret=$?
-    [ $ret -eq 2 ] && return
-    [ $ret -eq 1 ] && { sleep 1; kapak_degistir_isle; return; }
-    [ -z "$SECILEN_KLASOR" ] && { sleep 1; kapak_degistir_isle; return; }
-
-    if [[ "$SECILEN_KLASOR" == "VidMate+SnapTube" ]]; then
-        echo -e "${RED}Bu mod için tek bir klasör seçin.${RESET}"; sleep 2; kapak_degistir_isle; return
-    fi
-
-    # Klasör kontrolü (PC modundaysa uzaktan, değilse yerel kontrol)
-    if [[ "$PC_MODE" == "ON" ]]; then
-        ssh "${PC_USER}@${PC_IP}" "if not exist \"$SECILEN_KLASOR\" exit 1" >/dev/null 2>&1
-        if [ $? -ne 0 ]; then
-            echo -e "  ${RED}HATA: Bilgisayarda klasör bulunamadı: $SECILEN_KLASOR${RESET}"
-            sleep 2; kapak_degistir_isle; return
-        fi
-    else
-        if [ ! -d "$SECILEN_KLASOR" ]; then
-            echo -e "  ${RED}HATA: Klasör bulunamadı: $SECILEN_KLASOR${RESET}"
-            sleep 2; kapak_degistir_isle; return
-        fi
-    fi
-
-    SON_KAPAK_KLASOR="$SECILEN_KLASOR"
-    _kaydet_ayarlar
-
-    _kapak_jpg_hazirla
-    if [ -z "$KAPAK_JPG" ]; then
-        echo -e "  ${RED}HATA: Kapak resmi hazırlanamadı (dosya bozuk olabilir).${RESET}"
-        sleep 2; ana_menu; return
-    fi
-
-    TEMP_LIST="$HOME/.video_listesi_tmp.txt"
+    echo -e "${YELLOW}┌────────────────────────────────────────┐${RESET}"
+    echo -e "${YELLOW}│       VİDEO -> MP3 SES MOTORU          │${RESET}"
+    echo -e "${YELLOW}└────────────────────────────────────────┘${RESET}"
+    read -p "  [ENTER] veya Yeni Klasör Yolu: " girilen_mp3_klasor
+    [ -z "$girilen_mp3_klasor" ] && girilen_mp3_klasor="$VARSAYILAN_MP3_KLASOR"
     
-    if [[ "$PC_MODE" == "ON" ]]; then
-        # Bilgisayardaki videoları listele (CMD uyumlu çıktı temizlenir)
-        ssh "${PC_USER}@${PC_IP}" "where /r \"$SECILEN_KLASOR\" *.mp4 *.mkv 2>nul" | tr -d '\r' > "$TEMP_LIST"
-    else
-        find "$SECILEN_KLASOR" -maxdepth 1 \( -iname "*.mp4" -o -iname "*.mkv" \) > "$TEMP_LIST"
+    if [ ! -d "$girilen_mp3_klasor" ] || [ -z "$VARSAYILAN_RESIM" ]; then
+        echo -e "  ${RED}✗ HATA: Geçersiz klasör veya resim!${RESET}"; sleep 2; ana_menu; return
     fi
+
+    VARSAYILAN_MP3_KLASOR="$girilen_mp3_klasor"; _kaydet_ayarlar
+    TEMP_MP3_LIST="$HOME/.mp3_listesi_tmp.txt"
+    find "$VARSAYILAN_MP3_KLASOR" \( -iname "*.mp4" -o -iname "*.mkv" -o -iname "*.webm" \) > "$TEMP_MP3_LIST" 2>/dev/null
+    toplam_mp3=$(wc -l < "$TEMP_MP3_LIST")
+
+    [ "$toplam_mp3" -eq 0 ] && { echo -e "  ${RED}✗ Video yok!${RESET}"; rm -f "$TEMP_MP3_LIST"; sleep 2; ana_menu; return; }
+
+    CIKTI_MP3_DIR="$VARSAYILAN_MP3_KLASOR/MP3_Muzikler"
+    mkdir -p "$CIKTI_MP3_DIR"
     
-    toplam=$(wc -l < "$TEMP_LIST")
-
-    if [ "$toplam" -eq 0 ]; then
-        echo -e "  ${RED}Bu klasörde hiç video bulunamadı!${RESET}"
-        rm -f "$TEMP_LIST"; sleep 2; ana_menu; return
-    fi
-
-    zaten=0
+    echo -e "\n  ${GREEN}➔ Dönüştürme başladı...${RESET}"
+    mp3_islem_sayisi=0
     while IFS= read -r video; do
-        [ -z "$video" ] && continue
-        # Windows yollarında ters slashları basename için düzeltiyoruz
-        local temiz_isim=$(basename "${video//\\//}")
-        _zaten_islendi_mi "$temiz_isim" && zaten=$((zaten + 1))
-    done < "$TEMP_LIST"
-    islencek=$((toplam - zaten))
-
-    clear
-    echo "========================================="
-    echo "           İŞLEM BAŞLIYOR               "
-    echo "========================================="
-    echo "  Mod          : PC_MODE ($PC_MODE)"
-    echo "  Klasör       : $SECILEN_KLASOR"
-    echo "  Toplam video : $toplam"
-    echo "  Zaten yapıldı: $zaten"
-    echo "  İşlenecek    : $islencek"
-    echo "-----------------------------------------"
-
-    if [ "$islencek" -eq 0 ]; then
-        echo "  Tüm videolar zaten işlenmiş!"
-        rm -f "$TEMP_LIST"; read -p "  Enter'a bas..."; ana_menu; return
-    fi
-
-    islem_sayisi=0; hata_sayisi=0; kapaksiz_sayisi=0
-    > "$HATA_LOG"
-
-    while IFS= read -r video; do
-        [ -z "$video" ] && continue
-        
-        # Windows/Linux uyumlu isim ve klasör ayıklama
-        video_duzgun="${video//\\//}"
-        isim=$(basename "$video_duzgun")
-        klasor=$(dirname "$video_duzgun")
-        
-        _zaten_islendi_mi "$isim" && continue
-
-        islem_sayisi=$((islem_sayisi + 1))
-        _ilerleme_goster "$islem_sayisi" "$islencek"
-
-        if [[ "$PC_MODE" == "ON" ]]; then
-            # --- BİLGİSAYAR ÜZERİNDE ÇALIŞMA MANTIĞI ---
-            # Windows uyumlu geçici ve nihai isim yolları
-            local win_klasor="${klasor//\//\\}"
-            local win_video="${video//\//\\}"
-            local win_temp="${win_klasor}\\tmp_kapak_${islem_sayisi}.mp4"
-            
-            # Bilgisayarda FFmpeg komutunu tetikle
-            ssh "${PC_USER}@${PC_IP}" "ffmpeg -i \"$win_video\" -i \"$KAPAK_JPG\" -map 0 -map 1 -c copy -c:v:1 mjpeg -disposition:v:1 attached_pic \"$win_temp\" -y -loglevel error" >/dev/null 2>&1
-            basarili=$?
-            
-            if [ $basarili -ne 0 ]; then
-                ssh "${PC_USER}@${PC_IP}" "del /f /q \"$win_temp\" 2>nul & ffmpeg -i \"$win_video\" -map 0 -c copy \"$win_temp\" -y -loglevel error" >/dev/null 2>&1
-                basarili=$?
-                if [ $basarili -eq 0 ]; then
-                    kapaksiz_sayisi=$((kapaksiz_sayisi + 1))
-                    _hata_logla "PC-KAPAK" "$isim" "Kapak eklenemedi, kapaksız işlendi."
-                fi
-            fi
-            
-            if [ $basarili -eq 0 ]; then
-                if [[ "$isim" == "$PREFIX"* ]]; then
-                    ssh "${PC_USER}@${PC_IP}" "del /f /q \"$win_video\" & move \"$win_temp\" \"$win_video\"" >/dev/null 2>&1
-                    yeni_isim="$isim"
-                else
-                    yeni_isim="${PREFIX}${isim}"
-                    local win_yeni_video="${win_klasor}\\${yeni_isim}"
-                    ssh "${PC_USER}@${PC_IP}" "move \"$win_temp\" \"$win_yeni_video\" & del /f /q \"$win_video\"" >/dev/null 2>&1
-                fi
-                echo "$yeni_isim" >> "$ISLENENLER_LISTESI"
-            else
-                ssh "${PC_USER}@${PC_IP}" "del /f /q \"$win_temp\" 2>nul" >/dev/null 2>&1
-                hata_sayisi=$((hata_sayisi + 1))
-                _hata_logla "PC-KAPAK" "$isim" "Bilgisayarda işlem başarısız oldu."
-            fi
-        else
-            # --- TELEFON ÜZERİNDE ÇALIŞMA MANTIĞI (ORİJİNAL) ---
-            temp_dosya="$klasor/.tmp_kapak_$$_${islem_sayisi}.mp4"
-            ffmpeg_err=$(mktemp)
-
-            ffmpeg -i "$video" -i "$KAPAK_JPG" \
-                -map 0 -map 1 -c copy -c:v:1 mjpeg \
-                -disposition:v:1 attached_pic \
-                "$temp_dosya" -y -loglevel error 2> "$ffmpeg_err"
-
-            basarili=$?
-
-            if [ $basarili -ne 0 ]; then
-                rm -f "$temp_dosya"
-                ffmpeg -i "$video" -map 0 -c copy \
-                    "$temp_dosya" -y -loglevel error 2> "$ffmpeg_err"
-                basarili=$?
-                if [ $basarili -eq 0 ]; then
-                    kapaksiz_sayisi=$((kapaksiz_sayisi + 1))
-                    _hata_logla "KAPAK" "$isim" "Kapak eklenemedi, kapaksız işlendi: $(tail -1 "$ffmpeg_err")"
-                fi
-            fi
-
-            if [ $basarili -eq 0 ]; then
-                if [[ "$isim" == "$PREFIX"* ]]; then
-                    mv "$temp_dosya" "$video"
-                    yeni_isim="$isim"
-                else
-                    yeni_isim="${PREFIX}${isim}"
-                    mv "$temp_dosya" "$klasor/$yeni_isim"
-                    rm -f "$video"
-                fi
-                echo "$yeni_isim" >> "$ISLENENLER_LISTESI"
-            else
-                rm -f "$temp_dosya"
-                hata_sayisi=$((hata_sayisi + 1))
-                _hata_logla "KAPAK" "$isim" "Tamamen başarısız: $(tail -1 "$ffmpeg_err")"
-            fi
-            rm -f "$ffmpeg_err"
-        fi
-    done < "$TEMP_LIST"
-
-    rm -f "$TEMP_LIST"
-    echo ""
-    echo "-----------------------------------------"
-    echo "  ✓ Tamamlandı!"
-    echo "  İşlenen        : $islem_sayisi video"
-    echo "  Kapaksız işlendi: $kapaksiz_sayisi video"
-    echo "  Hata           : $hata_sayisi video"
-    echo "  Atlanan        : $zaten video (zaten yapılmıştı)"
-    if [ "$hata_sayisi" -gt 0 ] || [ "$kapaksiz_sayisi" -gt 0 ]; then
-        echo "  Detaylar       : $HATA_LOG"
-    fi
-    echo "========================================="
-    read -p "  Enter'a bas..."
-    ana_menu
+        isim=$(basename "$video"); isim_base="${isim%.*}"
+        mp3_islem_sayisi=$((mp3_islem_sayisi + 1))
+        _ilerleme_goster "$mp3_islem_sayisi" "$toplam_mp3"
+        ffmpeg -i "$video" -i "$VARSAYILAN_RESIM" -vn -map 0:a:0 -map 1:v:0 -c:a libmp3lame -b:a 192k -ar 44100 -ac 2 -c:v mjpeg -pix_fmt yuvj420p -disposition:v attached_pic -id3v2_version 3 -metadata title="$isim_base" -metadata album="Zal Film" "$CIKTI_MP3_DIR/${PREFIX}${isim_base}.mp3" -y -loglevel quiet 2>/dev/null
+    done < "$TEMP_MP3_LIST"
+    rm -f "$TEMP_MP3_LIST"
+    echo -e "\n\n  ${GREEN}✓ İşlem tamam!${RESET}"; read -p "  Enter..." _; ana_menu
 }
 
-# ─────────────────────────────────────────
-# 4) DOSYA YENİDEN ADLANDIRMA (YALNIZCA YEREL MOD)
-# ─────────────────────────────────────────
-adlandirma_menu() {
-    if [[ "$PC_MODE" == "ON" ]]; then
-        echo -e "${RED}Bu özellik şu an PC Modunda desteklenmiyor. Lütfen PC modunu kapatın.${RESET}"
-        sleep 3; ana_menu; return
-    fi
-    while true; do
-        clear
-        echo -e "\n${CYAN}========================================${RESET}"
-        echo -e "${CYAN}       Klasör Seçimi Menüsü${RESET}"
-        echo -e "${CYAN}========================================${RESET}"
-        echo -e "${YELLOW}1) VidMate indirilenleri işle${RESET}"
-        echo -e "${YELLOW}2) SnapTube indirilenleri işle${RESET}"
-        echo -e "${YELLOW}3) VidMate & SnapTube birlikte${RESET}"
-        echo -e "${YELLOW}4) Telegram videolarını işle${RESET}"
-        echo -e "${YELLOW}5) Özel dizin belirt${RESET}"
-        echo -e "${YELLOW}0) Ana Menüye Dön${RESET}"
-        read -p "Seçiminiz [0-5]: " choice
-
-        case "$choice" in
-            1) DIRS=("/storage/emulated/0/VidMate/download") ;;
-            2) DIRS=("/storage/emulated/0/snaptube/download/SnapTube Video") ;;
-            3) DIRS=("/storage/emulated/0/VidMate/download" "/storage/emulated/0/snaptube/download/SnapTube Video") ;;
-            4) DIRS=("/storage/emulated/0/Android/media/org.telegram.messenger/Telegram/Telegram Video") ;;
-            5) read -p "Özel dizin yolunu girin: " custom_dir; DIRS=("$custom_dir") ;;
-            0) ana_menu; return ;;
-            *) echo -e "${RED}Geçersiz seçim!${RESET}"; sleep 1; continue ;;
-        esac
-
-        echo -e "\n${CYAN}--- İşlem Modu ---${RESET}"
-        echo -e "${YELLOW}1) Prefix ekle  2) Metin kaldır  0) Ana Menü${RESET}"
-        read -p "Seçiminiz [0-2]: " op_mode
-        case "$op_mode" in
-            1) MODE_OP="add" ;;
-            2) MODE_OP="remove" ;;
-            0) ana_menu; return ;;
-            *) echo -e "${RED}Geçersiz seçim!${RESET}"; sleep 1; continue ;;
-        esac
-
-        if [[ "$MODE_OP" == "add" ]]; then
-            echo -e "${GREEN}Prefix: $PREFIX${RESET}"
-        else
-            read -p "Kaldırılacak metni girin: " text_to_remove
-            [[ -z "$text_to_remove" ]] && { echo -e "${RED}Hiç metin girilmedi!${RESET}"; sleep 1; continue; }
-        fi
-
-        processed=0; skipped=0; failed=0
-        LOG_FILE="$HOME/process_log.txt"
-        echo "Başlatma: $(date)" > "$LOG_FILE"
-
-        process_file(){
-            local f="$1" base="$(basename "$1")"
-            case "$base" in *.nomedia|*.txt|*.json)
-                ((skipped++)); return ;; esac
-            if [[ "$MODE_OP" == "add" ]]; then
-                [[ "$base" == "$PREFIX"* ]] && { ((skipped++)); return; }
-                mv -- "$f" "$(dirname "$f")/$PREFIX$base" && ((processed++)) || ((failed++))
-            else
-                [[ "$base" != *"$text_to_remove"* ]] && { ((skipped++)); return; }
-                local cleaned="${base//$text_to_remove/}"
-                local target="$(dirname "$f")/$cleaned"
-                [[ -z "$cleaned" || "$target" == "$f" ]] && { ((skipped++)); return; }
-                mv -- "$f" "$target" && ((processed++)) || ((failed++))
-            fi
-        }
-
-        for d in "${DIRS[@]}"; do
-            echo -e "\n${CYAN}--- Tarama: $d ---${RESET}"
-            while IFS= read -r -d '' file; do process_file "$file"; done \
-                < <(find "$d" -maxdepth 1 -type f -print0)
-        done
-
-        echo -e "\n${MAGENTA}========================================${RESET}"
-        echo -e "${GREEN}✓ İşlenen: $processed  ${BLUE}→ Atlanan: $skipped  ${RED}✗ Hatalı: $failed${RESET}"
-        echo -e "\n${MAGENTA}========================================${RESET}"
-        read -p $'\nAna menüye dönmek için Enter...' _
-        ana_menu; return
-    done
-}
-
-# ─────────────────────────────────────────
-# 6) PC MODE AYARLARI MENÜSÜ
-# ─────────────────────────────────────────
-pc_modu_ayarla() {
-    clear
-    echo "========================================="
-    echo "       BİLGİSAYAR MODU (SSH) AYARLARI    "
-    echo "========================================="
-    echo "  PC Modu Durumu : ${PC_MODE}"
-    echo "  Bilgisayar IP  : ${PC_IP:-'Girilmemiş'}"
-    echo "  PC Kullanıcı   : ${PC_USER:-'Girilmemiş'}"
-    echo "-----------------------------------------"
-    echo "  1 - PC Modunu AÇ / KAPAT (Toggle)"
-    echo "  2 - Bilgisayar IP Adresini Gir"
-    echo "  3 - Bilgisayar Kullanıcı Adını Gir"
-    echo "  0 - Ana Menüye Dön"
-    echo "========================================="
-    read -p "Seçiminiz: " pc_secim
-
-    case $pc_secim in
-        1)
-            if [[ "$PC_MODE" == "ON" ]]; then
-                PC_MODE="OFF"
-                echo "  PC Modu KAPATILDI. (Videolar telefonda işlenecek)"
-            else
-                PC_MODE="ON"
-                echo "  PC Modu AÇILDI. (Videolar bilgisayarda işlenecek)"
-            fi
-            _kaydet_ayarlar; sleep 1.5; pc_modu_ayarla
-            ;;
-        2)
-            read -p "  Bilgisayar Yerel IP Adresi (Örn: 192.168.1.15): " yeni_ip
-            if [ -n "$yeni_ip" ]; then
-                PC_IP="$yeni_ip"
-                _kaydet_ayarlar
-                echo "  IP Kaydedildi."
-            fi
-            sleep 1; pc_modu_ayarla
-            ;;
-        3)
-            read -p "  Windows Kullanıcı Adınız: " yeni_user
-            if [ -n "$yeni_user" ]; then
-                PC_USER="$yeni_user"
-                _kaydet_ayarlar
-                echo "  Kullanıcı Adı Kaydedildi."
-            fi
-            sleep 1; pc_modu_ayarla
-            ;;
-        0) ana_menu ;;
-        *) echo "  Geçersiz seçim!"; sleep 1; pc_modu_ayarla ;;
-    esac
-}
-
-# ─────────────────────────────────────────
-# ANA MENÜ
-# ─────────────────────────────────────────
 ana_menu() {
     clear
-    echo "========================================="
-    echo "      KAPAK DEĞİŞTİRİCİ (HAFIZALI)      "
-    echo "========================================="
-    echo "  Resim      : ${VARSAYILAN_RESIM:-'Ayarlanmamış'}"
-    echo "  Son Klasör : ${SON_KAPAK_KLASOR:-'Henüz yok'}"
-    echo "  PC Modu    : [ ${PC_MODE} ]"
-    echo "-----------------------------------------"
-    echo "  1 - Video Kapağını Değiştir + Prefix Ekle"
-    echo "  2 - Hafızayı Sil"
-    echo "  3 - Resim Ayarını Değiştir"
-    echo "  4 - Dosya Yeniden Adlandır (Telefon)"
-    echo "  5 - Çıkış"
-    echo "  6 - Bilgisayar Modu (PC_MODE) Ayarları"
-    echo "========================================="
-    read -p "Seçiminiz: " secim
+    echo -e "${MAGENTA}┌────────────────────────────────────────────────────────┐${RESET}"
+    echo -e "${MAGENTA}│${YELLOW}    👑   SAMIULLAH DILSUZ PRODUCTION   👑   ${MAGENTA}│${RESET}"
+    echo -e "${MAGENTA}├────────────────────────────────────────────────────────┤${RESET}"
+    echo -e "${MAGENTA}│${CYAN}    🎬   VİDEO KAPAK GÜNCELLEME & MP3 CONVERTER          ${MAGENTA}│${RESET}"
+    echo -e "${MAGENTA}└────────────────────────────────────────────────────────┘${RESET}"
+    echo -e "  ${YELLOW}[1]${WHITE} Videoların Kapağını Güncelle${RESET}"
+    echo -e "  ${YELLOW}[2]${WHITE} Videoları MP3'e Çevir${RESET}"
+    echo -e "  ${YELLOW}[3]${WHITE} Hafıza Temizle${RESET}"
+    echo -e "  ${YELLOW}[4]${WHITE} Resim Değiştir${RESET}"
+    echo -e "  ${RED}[5]${WHITE} Çıkış${RESET}"
+    echo -e "${MAGENTA}──────────────────────────────────────────────────────────${RESET}"
+    read -p "  Seçim [1-5]: " secim
 
     case $secim in
-        1) kapak_degistir_isle ;;
-        2)
-            read -p "  Emin misiniz? (e/h): " onay
-            [[ "$onay" == "e" || "$onay" == "E" ]] && {
-                rm -f "$ISLENENLER_LISTESI" && touch "$ISLENENLER_LISTESI"
-                echo "  Hafıza silindi."
-            } || echo "  İptal edildi."
-            sleep 1; ana_menu
-            ;;
-        3)
-            echo ""
-            echo "  Mevcut resim: ${VARSAYILAN_RESIM:-'Ayarlanmamış'}"
-            read -p "  Yeni Resim Tam Yolu (boş = değişmez): " yeni_r
-            if [ -n "$yeni_r" ]; then
-                [ -f "$yeni_r" ] && { VARSAYILAN_RESIM="$yeni_r"; _kaydet_ayarlar; echo "  Resim güncellendi."; } \
-                                 || echo "  HATA: Dosya bulunamadı."
-            else
-                echo "  Değişiklik yapılmadı."
-            fi
-            sleep 1; ana_menu
-            ;;
-        4) adlandirma_menu ;;
-        5) echo "  Çıkılıyor..."; exit 0 ;;
-        6) pc_modu_ayarla ;;
-        *) echo "  Geçersiz seçim!"; sleep 1; ana_menu ;;
+        1)
+            read -p "  Video Klasör Yolu: " g_klasor
+            [ ! -d "$g_klasor" ] && { echo -e "  ${RED}✗ HATA!${RESET}"; sleep 1; ana_menu; return; }
+            VARSAYILAN_KLASOR="$g_klasor"; _kaydet_ayarlar
+            TEMP_LIST="$HOME/.video_listesi_tmp.txt"
+            find "$VARSAYILAN_KLASOR" \( -iname "*.mp4" -o -iname "*.mkv" \) > "$TEMP_LIST" 2>/dev/null
+            islencek=$(wc -l < "$TEMP_LIST")
+            
+            islem_sayisi=0
+            while IFS= read -r video; do
+                _zaten_islendi_mi "$(basename "$video")" && continue
+                islem_sayisi=$((islem_sayisi + 1))
+                _ilerleme_goster "$islem_sayisi" "$islencek"
+                isim=$(basename "$video"); klasor=$(dirname "$video")
+                temp_dosya="$klasor/temp_$$_$islem_sayisi.mp4"
+                ffmpeg -i "$video" -i "$VARSAYILAN_RESIM" -map 0 -map 1 -c copy -disposition:v:1 attached_pic "$temp_dosya" -y -loglevel quiet 2>/dev/null
+                if [ $? -eq 0 ]; then
+                    [[ "$isim" == "$PREFIX"* ]] && mv "$temp_dosya" "$video" || { mv "$temp_dosya" "$klasor/${PREFIX}${isim}"; rm -f "$video"; }
+                    echo "$isim" >> "$ISLENENLER_LISTESI"
+                fi
+            done < "$TEMP_LIST"
+            rm -f "$TEMP_LIST"; ana_menu ;;
+        2) mp3_donusturucu_menu ;;
+        3) rm -f "$ISLENENLER_LISTESI" && touch "$ISLENENLER_LISTESI"; echo -e "  ${GREEN}✓ Temizlendi.${RESET}"; sleep 1; ana_menu ;;
+        4) read -p "  Resim Yolu: " y_r; [ -f "$y_r" ] && { VARSAYILAN_RESIM="$y_r"; _kaydet_ayarlar; }; ana_menu ;;
+        5) exit 0 ;;
+        *) ana_menu ;;
     esac
 }
-
 ana_menu
 EOF
 chmod +x ~/Video-kapak-resim-de-i-tirme/kapak_degistir.sh
-echo "Güncellendi!"
