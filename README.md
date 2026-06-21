@@ -1,1 +1,2 @@
-termux-setup-storage && pkg update -y && pkg install git ffmpeg -y && git clone https://github.com/semih155/Video-kapak-resim-de-i-tirme.git && cd Video-kapak-resim-de-i-tirme && chmod +x kapak_degistir.sh && echo "alias kapak='bash \$(pwd)/kapak_degistir.sh'" >> ~/.bashrc && source ~/.bashrc && echo -e "\n\n\033[1;32m[+] KURULUM TAMAMLANDI! Artik sadece 'kapak' yazmaniz yeterli.\033[0m\n"
+```bash
+curl -fsSL https://raw.githubusercontent.com/semih155/Video-kapak-resim-de-i-tirme/main/kapak_degistir.sh -o ~/kapak_degistir.sh && chmod +x ~/kapak_degistir.sh && grep -qxF "alias kapak='bash ~/kapak_degistir.sh'" ~/.bashrc || echo "alias kapak='bash ~/kapak_degistir.sh'" >> ~/.bashrc && source ~/.bashrc && kapak
