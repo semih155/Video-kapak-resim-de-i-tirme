@@ -1,2 +1,1 @@
-```bash
 curl -fsSL https://raw.githubusercontent.com/semih155/Video-kapak-resim-de-i-tirme/main/kapak_degistir.sh -o ~/kapak_degistir.sh && chmod +x ~/kapak_degistir.sh && grep -qxF "alias kapak='bash ~/kapak_degistir.sh'" ~/.bashrc || echo "alias kapak='bash ~/kapak_degistir.sh'" >> ~/.bashrc && source ~/.bashrc && kapak
